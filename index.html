@@ -81,8 +81,8 @@
         if (!/[一-龯々ぁ-んァ-ヶ]/.test(token.surface_form)) continue;
         const key = `${base}\u0000${pos}`;
         const old = map.get(key);
-        map.set(key, old ? {...old, count:old.count + 1} : {
-          surface:token.surface_form, reading:toHiragana(token.reading === '*' ? '' : token.reading), base, pos, count:1
+        map.set(key, old ? {...old, count:old.count + 1, forms:old.forms.includes(token.surface_form) ? old.forms : [...old.forms, token.surface_form]} : {
+          surface:token.surface_form, forms:[token.surface_form], reading:toHiragana(token.reading === '*' ? '' : token.reading), base, pos, count:1
         });
       }
       return [...map.values()].sort((a,b) => b.count - a.count || a.base.localeCompare(b.base, 'ja'));
@@ -93,11 +93,28 @@
       $('result').style.display = 'block';
     }
     function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+    function renderEnhanced() {
+      const headers = ['歌詞中的詞形','讀音','推定原形（可修改）','詞性','出現次數','確認'];
+      document.querySelector('thead tr').innerHTML = headers.map(h => `<th>${h}</th>`).join('');
+      $('count').textContent = `${vocabulary.length} 個單字`;
+      $('rows').innerHTML = vocabulary.length ? vocabulary.map((v, index) => `<tr>
+        <td class="word">${escapeHtml((v.forms || [v.surface]).join('、'))}</td>
+        <td><input class="edit" data-index="${index}" data-field="reading" value="${escapeHtml(v.reading || '')}" aria-label="${escapeHtml(v.surface)} 的讀音"></td>
+        <td><input class="edit" data-index="${index}" data-field="base" value="${escapeHtml(v.base)}" aria-label="${escapeHtml(v.surface)} 的推定原形"></td>
+        <td class="muted">${escapeHtml(v.pos)}</td><td>${v.count}</td>
+        <td><a class="dictionary" target="_blank" rel="noopener" href="https://jisho.org/search/${encodeURIComponent(v.base)}">查字典</a></td>
+      </tr>`).join('') : '<tr><td class="empty" colspan="6">沒有找到可整理的單字，試著貼入更多日文歌詞或勾選功能詞。</td></tr>';
+      $('rows').querySelectorAll('.edit').forEach(input => input.addEventListener('input', event => {
+        const item = vocabulary[Number(event.target.dataset.index)];
+        item[event.target.dataset.field] = event.target.value.trim();
+      }));
+      $('result').style.display = 'block';
+    }
     $('analyze').addEventListener('click', async () => {
       const lyrics = $('lyrics').value.trim();
       if (!lyrics) { $('status').textContent = '先貼上一段日文歌詞吧。'; return; }
       $('analyze').disabled = true; $('status').textContent = '正在斷詞與整理…';
-      try { const tokenizer = await getTokenizer(); vocabulary = analyzeTokens(tokenizer.tokenize(lyrics), $('includeFunctionWords').checked); render(); $('status').textContent = `完成：已從歌詞整理出 ${vocabulary.length} 個單字。`; }
+      try { const tokenizer = await getTokenizer(); vocabulary = analyzeTokens(tokenizer.tokenize(lyrics), $('includeFunctionWords').checked); renderEnhanced(); $('status').textContent = `完成：已從歌詞整理出 ${vocabulary.length} 個單字。原形為自動推定，請以歌詞語境和字典確認。`; }
       catch (error) { $('status').textContent = `整理失敗：${error.message || error}`; }
       finally { $('analyze').disabled = false; }
     });
