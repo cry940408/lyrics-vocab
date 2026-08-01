@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>歌詞單字整理器</title>
+  <style>
+    :root { color-scheme: light; --ink:#17222e; --muted:#667085; --paper:#fffdf8; --accent:#d14f68; --accent-dark:#a9364e; --line:#eadfd4; --soft:#f8eee7; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; color:var(--ink); background:radial-gradient(circle at 92% 4%,#ffd8cd 0,transparent 24rem),linear-gradient(140deg,#fffaf0,#f6efff); font-family: system-ui,-apple-system,"Noto Sans TC",sans-serif; }
+    main { max-width:1050px; margin:auto; padding:52px 24px 64px; }
+    h1 { font-size:clamp(2rem,5vw,3.5rem); letter-spacing:-.06em; margin:0 0 10px; }
+    .lead { color:var(--muted); margin:0 0 30px; font-size:1.05rem; }
+    .card { background:rgba(255,253,248,.9); border:1px solid rgba(255,255,255,.9); border-radius:22px; box-shadow:0 15px 42px #4b263115; padding:24px; }
+    label { display:block; font-weight:700; margin-bottom:9px; }
+    textarea { width:100%; min-height:215px; resize:vertical; border:1px solid var(--line); border-radius:14px; padding:16px; font:1.05rem/1.7 ui-monospace,"Noto Sans JP",monospace; color:var(--ink); background:#fff; }
+    textarea:focus { outline:3px solid #fbd1da; border-color:var(--accent); }
+    .controls { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-top:16px; }
+    button { border:0; border-radius:999px; background:var(--accent); color:white; font-weight:800; padding:12px 20px; cursor:pointer; font-size:.98rem; }
+    button:hover { background:var(--accent-dark); } button:disabled { opacity:.6; cursor:wait; }
+    .secondary { background:var(--soft); color:var(--ink); } .secondary:hover { background:#efdfd3; }
+    .option { font-size:.92rem; color:var(--muted); display:flex; align-items:center; gap:7px; }
+    #status { color:var(--muted); min-height:1.4em; margin:14px 2px 0; }
+    #result { display:none; margin-top:26px; } .summary { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+    .badge { color:var(--accent-dark); background:#fde7eb; padding:5px 10px; border-radius:99px; font-weight:800; font-size:.9rem; }
+    .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:14px; max-height:520px; }
+    table { width:100%; border-collapse:collapse; min-width:720px; background:#fff; } th,td { text-align:left; padding:13px 15px; border-bottom:1px solid #f0e9e2; } th { position:sticky; top:0; background:#fff8f3; color:#785f55; font-size:.85rem; } tr:last-child td { border:0; } .word { font-size:1.12rem; font-weight:800; } .muted { color:var(--muted); font-size:.9rem; } .empty { color:var(--muted); font-style:italic; }
+    footer { color:var(--muted); font-size:.82rem; margin:22px 4px 0; line-height:1.6; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>歌詞單字整理器</h1>
+    <p class="lead">貼上日文歌詞，將重複出現的詞彙整理成可複習的清單。</p>
+    <section class="card">
+      <label for="lyrics">日文歌詞</label>
+      <textarea id="lyrics" placeholder="例：
+君の声が聞こえる
+夜空を見上げている"></textarea>
+      <div class="controls">
+        <button id="analyze">整理單字</button>
+        <button id="sample" class="secondary" type="button">填入範例</button>
+        <label class="option"><input id="includeFunctionWords" type="checkbox"> 包含助詞、助動詞等功能詞</label>
+      </div>
+      <div id="status" aria-live="polite">第一次使用時會下載日文斷詞字典，約需數秒。</div>
+    </section>
+    <section id="result" class="card">
+      <div class="summary">
+        <div><strong>你的單字表</strong> <span class="badge" id="count"></span></div>
+        <button id="download" class="secondary" type="button">下載 CSV（可匯入 Anki / Excel）</button>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>單字</th><th>讀音</th><th>原形</th><th>詞性</th><th>出現次數</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </section>
+    <footer>本工具僅在你的瀏覽器中處理貼上的歌詞，不會上傳或儲存內容。歌詞常有省略、詩意用法與不尋常讀音，建議將結果當作初步清單，再依歌曲語境確認意思。</footer>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let tokenizerPromise;
+    let vocabulary = [];
+    const ignoredPos = new Set(['助詞','助動詞','記号','フィラー','接続詞']);
+    const ignoredSurface = new Set(['する','いる','ある','こと','もの','これ','それ','あれ','この','その','あの','よう','ため','ところ']);
+    function toHiragana(value) { return (value || '').replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60)); }
+    function getTokenizer() {
+      if (!tokenizerPromise) tokenizerPromise = new Promise((resolve, reject) => {
+        if (!window.kuromoji) return reject(new Error('無法載入日文斷詞功能；請確認網路連線後重新整理。'));
+        kuromoji.builder({ dicPath: 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/' }).build((err, tokenizer) => err ? reject(err) : resolve(tokenizer));
+      });
+      return tokenizerPromise;
+    }
+    function analyzeTokens(tokens, includeFunctionWords) {
+      const map = new Map();
+      for (const token of tokens) {
+        const base = token.basic_form === '*' ? token.surface_form : token.basic_form;
+        const pos = token.pos || '';
+        if (!token.surface_form.trim() || token.word_type === 'UNKNOWN' || (!includeFunctionWords && ignoredPos.has(pos))) continue;
+        if (!includeFunctionWords && ignoredSurface.has(base)) continue;
+        if (!/[一-龯々ぁ-んァ-ヶ]/.test(token.surface_form)) continue;
+        const key = `${base}\u0000${pos}`;
+        const old = map.get(key);
+        map.set(key, old ? {...old, count:old.count + 1} : {
+          surface:token.surface_form, reading:toHiragana(token.reading === '*' ? '' : token.reading), base, pos, count:1
+        });
+      }
+      return [...map.values()].sort((a,b) => b.count - a.count || a.base.localeCompare(b.base, 'ja'));
+    }
+    function render() {
+      $('count').textContent = `${vocabulary.length} 個單字`;
+      $('rows').innerHTML = vocabulary.length ? vocabulary.map(v => `<tr><td class="word">${escapeHtml(v.surface)}</td><td>${escapeHtml(v.reading || '—')}</td><td>${escapeHtml(v.base)}</td><td class="muted">${escapeHtml(v.pos)}</td><td>${v.count}</td></tr>`).join('') : '<tr><td class="empty" colspan="5">沒有找到可整理的單字，試著貼入更多日文歌詞或勾選功能詞。</td></tr>';
+      $('result').style.display = 'block';
+    }
+    function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+    $('analyze').addEventListener('click', async () => {
+      const lyrics = $('lyrics').value.trim();
+      if (!lyrics) { $('status').textContent = '先貼上一段日文歌詞吧。'; return; }
+      $('analyze').disabled = true; $('status').textContent = '正在斷詞與整理…';
+      try { const tokenizer = await getTokenizer(); vocabulary = analyzeTokens(tokenizer.tokenize(lyrics), $('includeFunctionWords').checked); render(); $('status').textContent = `完成：已從歌詞整理出 ${vocabulary.length} 個單字。`; }
+      catch (error) { $('status').textContent = `整理失敗：${error.message || error}`; }
+      finally { $('analyze').disabled = false; }
+    });
+    $('sample').addEventListener('click', () => { $('lyrics').value = '君の声が聞こえる\n夜空を見上げている\n明日へ続く道を歩こう\n悲しみを越えて笑えるように'; $('lyrics').focus(); });
+    $('download').addEventListener('click', () => {
+      const csv = ['單字,讀音,原形,詞性,出現次數', ...vocabulary.map(v => [v.surface,v.reading,v.base,v.pos,v.count].map(x => `"${String(x).replaceAll('"','""')}"`).join(','))].join('\r\n');
+      const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], {type:'text/csv;charset=utf-8'})); const a = document.createElement('a'); a.href = url; a.download = '日文歌詞單字表.csv'; a.click(); URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
